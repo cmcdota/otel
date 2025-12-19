@@ -1,49 +1,86 @@
 services:
+  # 1) OpenTelemetry Collector — принимает OTLP и пишет в Elasticsearch
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
     container_name: otel-collector
-    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    command: ["--config=/etc/otelcol-config.yaml"]
     volumes:
-      - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ./otel-collector-config.yaml:/etc/otelcol-config.yaml:ro
     ports:
-      - "4317:4317"   # OTLP gRPC
+      - "4317:4317"   # OTLP gRPC (на будущее)
       - "4318:4318"   # OTLP HTTP
       - "8888:8888"   # метрики коллектора
       - "13133:13133" # health-check
     depends_on:
-      - loki
+      - elasticsearch
     networks:
       - observability
 
-  loki:
-    image: grafana/loki:latest
-    container_name: loki
-    command: ["-config.file=/etc/loki/local-config.yaml"]
+  # 2) MongoDB — для метаданных Graylog
+  mongodb:
+    image: mongo:5.0
+    container_name: mongodb
     volumes:
-      - loki-data:/loki
-    ports:
-      - "3100:3100"
+      - mongo_data:/data/db
     networks:
       - observability
 
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    depends_on:
-      - loki
-    ports:
-      - "3000:3000"   # web-интерфейс Grafana
+  # 3) Elasticsearch — хранилище логов (и для Graylog, и для otel-логов)
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch-oss:7.10.2
+    container_name: elasticsearch
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - discovery.type=single-node
+      - http.host=0.0.0.0
+      - transport.host=localhost
+      - network.host=0.0.0.0
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
     volumes:
-      - grafana-data:/var/lib/grafana
+      - es_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    networks:
+      - observability
+
+  # 4) Graylog — веб-админка, работающая через этот же Elasticsearch
+  graylog:
+    image: graylog/graylog:5.0
+    container_name: graylog
+    depends_on:
+      - mongodb
+      - elasticsearch
+    environment:
+      # длинный рандомный секрет, можешь потом заменить
+      - GRAYLOG_PASSWORD_SECRET=change_me_to_long_random_secret_123456
+      # admin / admin
+      - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+      # как ты к нему заходишь
+      - GRAYLOG_HTTP_EXTERNAL_URI=http://localhost:9000/
+      # куда ходить в Elasticsearch
+      - GRAYLOG_ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      # куда ходить в Mongo
+      - GRAYLOG_MONGODB_URI=mongodb://mongodb:27017/graylog
+    entrypoint: >
+      /usr/bin/tini -- wait-for-it elasticsearch:9200 -- /docker-entrypoint.sh
+    volumes:
+      - graylog_data:/usr/share/graylog/data
+    ports:
+      - "9000:9000"      # веб-интерфейс Graylog
+      - "1514:1514"      # Syslog TCP (на будущее)
+      - "1514:1514/udp"  # Syslog UDP
+      - "12201:12201"    # GELF TCP (на будущее)
+      - "12201:12201/udp"# GELF UDP
     networks:
       - observability
 
 volumes:
-  loki-data:
-  grafana-data:
+  mongo_data:
+  es_data:
+  graylog_data:
 
 networks:
   observability:
