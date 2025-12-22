@@ -7,19 +7,25 @@ receivers:
         endpoint: 0.0.0.0:4318
 
 processors:
+  # мапим otel-поля в то, что ждёт syslog exporter
+  transform/syslog:
+    log_statements:
+      - context: log
+        statements:
+          - set(attributes["message"], body)
+          - set(attributes["priority"], severity_number)
+
   batch: {}
 
 exporters:
-  # Для проверки — пишет всё в stdout коллектора
   debug:
     verbosity: normal
 
-  # Экспорт логов в Graylog через Syslog
   syslog/graylog:
-    endpoint: graylog          # имя сервиса graylog в docker-сети
-    network: udp               # UDP, под наш Syslog UDP input
-    port: 1514                 # тот же порт, что в Graylog Input
-    protocol: rfc5424          # современный формат syslog
+    endpoint: graylog      # имя сервиса Graylog в docker-compose
+    network: udp
+    port: 1514             # Syslog UDP input в Graylog
+    protocol: rfc5424
     timeout: 5s
 
 extensions:
@@ -31,5 +37,5 @@ service:
   pipelines:
     logs:
       receivers: [otlp]
-      processors: [batch]
+      processors: [transform/syslog, batch]
       exporters: [debug, syslog/graylog]
