@@ -127,6 +127,12 @@ return [
             'path' => storage_path('logs/laravel.log'),
         ],
 
+        'otel' => [
+            'driver' => 'custom',
+            'via' => Laratel\Opentelemetry\Logger\OtelLoggerFactory::class,
+            'level' => 'debug',
+        ],
+
     ],
 
 ];
