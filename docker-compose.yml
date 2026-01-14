@@ -1,86 +1,129 @@
 services:
-  # 1) OpenTelemetry Collector — принимает OTLP и пишет в Elasticsearch
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
-    container_name: otel-collector
-    command: ["--config=/etc/otelcol-config.yaml"]
+  # -------------------------
+  # LOGS: Graylog stack
+  # -------------------------
+  mongo:
+    image: mongo:6.0
+    container_name: mongo
     volumes:
-      - ./otel-collector-config.yaml:/etc/otelcol-config.yaml:ro
-    ports:
-      - "4317:4317"   # OTLP gRPC (на будущее)
-      - "4318:4318"   # OTLP HTTP
-      - "8888:8888"   # метрики коллектора
-      - "13133:13133" # health-check
-    depends_on:
-      - elasticsearch
-    networks:
-      - observability
+      - mongo-data:/data/db
+    networks: [observability]
 
-  # 2) MongoDB — для метаданных Graylog
-  mongodb:
-    image: mongo:5.0
-    container_name: mongodb
-    volumes:
-      - mongo_data:/data/db
-    networks:
-      - observability
-
-  # 3) Elasticsearch — хранилище логов (и для Graylog, и для otel-логов)
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch-oss:7.10.2
     container_name: elasticsearch
     environment:
       - discovery.type=single-node
-      - http.host=0.0.0.0
-      - transport.host=localhost
-      - network.host=0.0.0.0
-      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
     ulimits:
       memlock:
         soft: -1
         hard: -1
     volumes:
-      - es_data:/usr/share/elasticsearch/data
+      - es-data:/usr/share/elasticsearch/data
     ports:
       - "9200:9200"
-    networks:
-      - observability
+    networks: [observability]
 
-  # 4) Graylog — веб-админка, работающая через этот же Elasticsearch
   graylog:
-    image: graylog/graylog:5.0
+    image: graylog/graylog:7.0.3
     container_name: graylog
     depends_on:
-      - mongodb
+      - mongo
       - elasticsearch
     environment:
-      # длинный рандомный секрет, можешь потом заменить
-      - GRAYLOG_PASSWORD_SECRET=change_me_to_long_random_secret_123456
-      # admin / admin
+      # обязателен (любая длинная случайная строка)
+      - GRAYLOG_PASSWORD_SECRET=PLEASE_CHANGE_ME_TO_A_LONG_RANDOM_SECRET
+      # пароль admin в SHA256:
+      # echo -n "admin" | sha256sum
       - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
-      # как ты к нему заходишь
-      - GRAYLOG_HTTP_EXTERNAL_URI=http://localhost:9000/
-      # куда ходить в Elasticsearch
+      - GRAYLOG_HTTP_EXTERNAL_URI=http://127.0.0.1:9000/
+      - GRAYLOG_MONGODB_URI=mongodb://mongo:27017/graylog
       - GRAYLOG_ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-      # куда ходить в Mongo
-      - GRAYLOG_MONGODB_URI=mongodb://mongodb:27017/graylog
-    entrypoint: >
-      /usr/bin/tini -- wait-for-it elasticsearch:9200 -- /docker-entrypoint.sh
-    volumes:
-      - graylog_data:/usr/share/graylog/data
     ports:
-      - "9000:9000"      # веб-интерфейс Graylog
-      - "1514:1514"      # Syslog TCP (на будущее)
-      - "1514:1514/udp"  # Syslog UDP
-      - "12201:12201"    # GELF TCP (на будущее)
-      - "12201:12201/udp"# GELF UDP
-    networks:
-      - observability
+      - "9000:9000"   # Graylog UI/API
+      # порт для OpenTelemetry (gRPC) input ты включишь в UI (см. ниже)
+      - "4319:4319"
+    volumes:
+      - graylog-data:/usr/share/graylog/data
+    networks: [observability]
+
+  # -------------------------
+  # TRACES: VictoriaTraces (storage)
+  # -------------------------
+  victoria-traces:
+    image: victoriametrics/victoria-traces:latest
+    container_name: victoria-traces
+    command:
+      - "-storageDataPath=/victoria-traces-data"
+      - "-httpListenAddr=:10428"
+    volumes:
+      - victoria-traces-data:/victoria-traces-data
+    ports:
+      - "10428:10428"
+    networks: [observability]
+
+  # -------------------------
+  # METRICS: Prometheus (storage+UI)
+  # -------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks: [observability]
+
+  # -------------------------
+  # OTel Collector (routing hub)
+  # -------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.140.1
+    container_name: otel-collector
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    depends_on:
+      - victoria-traces
+      - graylog
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC in
+      - "4318:4318"   # OTLP HTTP in
+      - "13133:13133" # health check
+      - "8888:8888"   # collector internal metrics
+      - "9464:9464"   # prometheus exporter (app metrics out)
+    networks: [observability]
+
+  # -------------------------
+  # TRACES UI: Jaeger UI via nginx -> VictoriaTraces
+  # -------------------------
+  jaeger:
+    image: jaegertracing/all-in-one:1.54
+    container_name: jaeger
+    environment:
+      # Говорим Jaeger UI, что backend query API находится не у него, а снаружи:
+      # (это через query service URL)
+      - QUERY_BASE_PATH=/
+      - JAEGER_QUERY_BASE_PATH=/
+      - JAEGER_UI_CONFIG=/etc/jaeger/ui-config.json
+    volumes:
+      - ./jaeger-ui-config.json:/etc/jaeger/ui-config.json:ro
+    ports:
+      - "16686:16686"
+    networks: [observability]
+
 
 volumes:
-  mongo_data:
-  es_data:
-  graylog_data:
+  mongo-data:
+  es-data:
+  graylog-data:
+  prometheus-data:
+  victoria-traces-data:
 
 networks:
   observability:

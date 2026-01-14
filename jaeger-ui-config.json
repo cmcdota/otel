@@ -1,0 +1,13 @@
+{
+    "dependencies": { "enabled": true },
+    "archiveEnabled": false,
+    "tracking": { "gaID": "" },
+    "menu": [
+        { "label": "Search", "path": "/" }
+    ],
+    "linkPatterns": [],
+    "search": { "maxLookback": { "label": "2 days", "value": "2d" } },
+    "query": {
+        "url": "http://victoria-traces:10428/select/jaeger/api"
+    }
+}
