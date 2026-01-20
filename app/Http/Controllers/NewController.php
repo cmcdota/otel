@@ -9,8 +9,6 @@ class NewController
 {
     public function testMe()
     {
-        \Log::info('about to call http client');
-
         $r = Http::withOptions(['verify' => false])
             ->get('https://httpbin.org/get', ['user' => '123']);
 

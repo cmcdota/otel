@@ -11,6 +11,7 @@ services:
       - "-httpListenAddr=:10428"
     networks: [obs]
 
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
     container_name: otel-collector
