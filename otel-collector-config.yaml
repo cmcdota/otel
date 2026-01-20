@@ -1,3 +1,6 @@
+extensions:
+  health_check:
+
 receivers:
   otlp:
     protocols:
@@ -7,34 +10,24 @@ receivers:
         endpoint: 0.0.0.0:4318
 
 processors:
-  batch: {}
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  batch:
 
 exporters:
-  debug:
-    verbosity: detailed
-
-  # traces -> VictoriaTraces (OTLP/HTTP)
+  # ТРЕЙСЫ -> VictoriaTraces OTLP/HTTP ingest endpoint
   otlphttp/victoriatraces:
-    endpoint: http://victoria-traces:10428
     traces_endpoint: http://victoria-traces:10428/insert/opentelemetry/v1/traces
-    tls:
-      insecure: true
 
-  # metrics -> Prometheus scrape endpoint
+  # Метрики -> отдаём наружу как /metrics (Prometheus будет скрейпить)
   prometheus:
     endpoint: 0.0.0.0:9464
-    send_timestamps: true
-    enable_open_metrics: true
 
-  # logs -> Graylog OTLP gRPC input (создашь input в UI на 4319)
-  otlp/graylog:
-    endpoint: graylog:4319
-    tls:
-      insecure: true
-
-extensions:
-  health_check:
-    endpoint: 0.0.0.0:13133
+  # Для отладки (можешь потом убрать)
+  debug:
+    verbosity: detailed
 
 service:
   telemetry:
@@ -43,14 +36,16 @@ service:
   extensions: [health_check]
   pipelines:
     traces:
-      receivers: [otlp]
-      processors: [batch]
-      exporters: [otlphttp/victoriatraces, debug]
+      receivers:  [otlp]
+      processors: [memory_limiter, batch]
+      exporters:  [otlphttp/victoriatraces, debug]
+
     metrics:
-      receivers: [otlp]
-      processors: [batch]
-      exporters: [prometheus]
+      receivers:  [otlp]
+      processors: [memory_limiter, batch]
+      exporters:  [prometheus, debug]
+
     logs:
-      receivers: [otlp]
-      processors: [batch]
-      exporters: [otlp/graylog, debug]
+      receivers:  [otlp]
+      processors: [memory_limiter, batch]
+      exporters:  [debug]

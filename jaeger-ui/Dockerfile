@@ -1,18 +1,23 @@
-# jaeger-ui/Dockerfile
-ARG JAEGER_IMAGE=cr.jaegertracing.io/jaegertracing/jaeger:2.14.1
+# ---------- build stage ----------
+FROM node:24-alpine AS build
 
-FROM ${JAEGER_IMAGE} AS jaeger
+ARG JAEGER_UI_VERSION=v2.14.1
 
-# В некоторых образах Jaeger сборка идёт не под root, поэтому пишем в /tmp
-RUN set -eux; \
-    OUT_DIR="/tmp/out"; \
-    mkdir -p "${OUT_DIR}"; \
-    UI_INDEX="$(find / -type f -name index.html 2>/dev/null | grep -E 'jaeger|ui' | head -n 1)"; \
-    echo "Found index: ${UI_INDEX}"; \
-    UI_DIR="$(dirname "${UI_INDEX}")"; \
-    echo "Using UI dir: ${UI_DIR}"; \
-    cp -a "${UI_DIR}/." "${OUT_DIR}/"
+RUN apk add --no-cache git python3 make g++
 
+RUN git clone --depth 1 --branch ${JAEGER_UI_VERSION} https://github.com/jaegertracing/jaeger-ui.git /src
+WORKDIR /src
+
+RUN corepack enable
+
+# у jaeger-ui сейчас может быть npm lockfile; используем yarn без frozen
+RUN yarn install
+
+WORKDIR /src/packages/jaeger-ui
+RUN yarn build
+
+# ---------- runtime stage ----------
 FROM nginx:alpine
-COPY --from=jaeger /tmp/out /usr/share/nginx/html
+COPY --from=build /src/packages/jaeger-ui/build/ /usr/share/nginx/html/
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 8080

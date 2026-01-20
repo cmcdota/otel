@@ -1,24 +1,11 @@
 global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
+  scrape_interval: 10s
 
 scrape_configs:
-  - job_name: "prometheus"
+  - job_name: otel-collector
     static_configs:
-      - targets: ["prometheus:9090"]
+      - targets: ["otel-collector:8888"]  # метрики самого collector
 
-  # метрики приложений, которые пришли в otel-collector, и отданы наружу prometheus exporter'ом
-  - job_name: "otel-app-metrics"
+  - job_name: otlp-metrics-via-collector
     static_configs:
-      - targets: ["otel-collector:9464"]
-
-  # внутренние метрики самого otel-collector
-  - job_name: "otel-collector-internal"
-    static_configs:
-      - targets: ["otel-collector:8888"]
-
-  # (опционально) если /metrics у victoria-traces доступен — Prometheus его подхватит
-  - job_name: "victoria-traces"
-    static_configs:
-      - targets: ["victoria-traces:10428"]
-    metrics_path: /metrics
+      - targets: ["otel-collector:9464"]  # метрики, пришедшие по OTLP -> exporter prometheus

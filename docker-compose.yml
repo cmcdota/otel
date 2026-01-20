@@ -1,72 +1,45 @@
 services:
-  # -------------------------
-  # LOGS: Graylog stack
-  # -------------------------
-  mongo:
-    image: mongo:6.0
-    container_name: mongo
-    volumes:
-      - mongo-data:/data/db
-    networks: [observability]
-
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch-oss:7.10.2
-    container_name: elasticsearch
-    environment:
-      - discovery.type=single-node
-      - bootstrap.memory_lock=true
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    volumes:
-      - es-data:/usr/share/elasticsearch/data
-    ports:
-      - "9200:9200"
-    networks: [observability]
-
-  graylog:
-    image: graylog/graylog:7.0.3
-    container_name: graylog
-    depends_on:
-      - mongo
-      - elasticsearch
-    environment:
-      # обязателен (любая длинная случайная строка)
-      - GRAYLOG_PASSWORD_SECRET=PLEASE_CHANGE_ME_TO_A_LONG_RANDOM_SECRET
-      # пароль admin в SHA256:
-      # echo -n "admin" | sha256sum
-      - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
-      - GRAYLOG_HTTP_EXTERNAL_URI=http://127.0.0.1:9000/
-      - GRAYLOG_MONGODB_URI=mongodb://mongo:27017/graylog
-      - GRAYLOG_ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-    ports:
-      - "9000:9000"   # Graylog UI/API
-      # порт для OpenTelemetry (gRPC) input ты включишь в UI (см. ниже)
-      - "4319:4319"
-    volumes:
-      - graylog-data:/usr/share/graylog/data
-    networks: [observability]
-
-  # -------------------------
-  # TRACES: VictoriaTraces (storage)
-  # -------------------------
   victoria-traces:
     image: victoriametrics/victoria-traces:latest
     container_name: victoria-traces
+    ports:
+      - "10428:10428"   # ingest + query HTTP
+    volumes:
+      - victoria-traces-data:/victoria-traces-data
     command:
       - "-storageDataPath=/victoria-traces-data"
       - "-httpListenAddr=:10428"
-    volumes:
-      - victoria-traces-data:/victoria-traces-data
-    ports:
-      - "10428:10428"
-    networks: [observability]
+    networks: [obs]
 
-  # -------------------------
-  # METRICS: Prometheus (storage+UI)
-  # -------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-collector
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"     # OTLP gRPC (traces/metrics/logs)
+      - "4318:4318"     # OTLP HTTP (traces/metrics/logs)
+      - "8888:8888"     # metrics самого collector (для Prometheus)
+      - "13133:13133"   # healthcheck
+      - "9464:9464"     # Prometheus scrape endpoint для OTLP-metrics (экспорт из collector)
+    depends_on:
+      - victoria-traces
+    networks: [obs]
+
+  jaeger-ui:
+    build:
+      context: ./jaeger-ui
+      args:
+        # можно менять (пример: v2.14.1). Важно: это TAG репозитория jaeger-ui
+        JAEGER_UI_VERSION: "v2.14.1"
+    container_name: jaeger-ui
+    ports:
+      - "16686:8080"    # Jaeger UI (как привычный порт)
+    depends_on:
+      - victoria-traces
+    networks: [obs]
+
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
@@ -77,53 +50,13 @@ services:
       - prometheus-data:/prometheus
     ports:
       - "9090:9090"
-    networks: [observability]
-
-  # -------------------------
-  # OTel Collector (routing hub)
-  # -------------------------
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.140.1
-    container_name: otel-collector
-    command: ["--config=/etc/otelcol-contrib/config.yaml"]
     depends_on:
-      - victoria-traces
-      - graylog
-    volumes:
-      - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
-    ports:
-      - "4317:4317"   # OTLP gRPC in
-      - "4318:4318"   # OTLP HTTP in
-      - "13133:13133" # health check
-      - "8888:8888"   # collector internal metrics
-      - "9464:9464"   # prometheus exporter (app metrics out)
-    networks: [observability]
-
-  # -------------------------
-  # TRACES UI: Jaeger UI via nginx -> VictoriaTraces
-  # -------------------------
-  jaeger:
-    image: jaegertracing/all-in-one:1.54
-    container_name: jaeger
-    environment:
-      # Говорим Jaeger UI, что backend query API находится не у него, а снаружи:
-      # (это через query service URL)
-      - QUERY_BASE_PATH=/
-      - JAEGER_QUERY_BASE_PATH=/
-      - JAEGER_UI_CONFIG=/etc/jaeger/ui-config.json
-    volumes:
-      - ./jaeger-ui-config.json:/etc/jaeger/ui-config.json:ro
-    ports:
-      - "16686:16686"
-    networks: [observability]
-
+      - otel-collector
+    networks: [obs]
 
 volumes:
-  mongo-data:
-  es-data:
-  graylog-data:
-  prometheus-data:
   victoria-traces-data:
+  prometheus-data:
 
 networks:
-  observability:
+  obs:

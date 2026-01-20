@@ -1,0 +1,168 @@
+set -euo pipefail
+
+TRACE_ID="$(openssl rand -hex 16)"   # 32 hex
+ROOT_SPAN="$(openssl rand -hex 8)"   # 16 hex
+SPAN_MW="$(openssl rand -hex 8)"
+SPAN_CTRL="$(openssl rand -hex 8)"
+SPAN_DB="$(openssl rand -hex 8)"
+SPAN_CACHE="$(openssl rand -hex 8)"
+SPAN_HTTP="$(openssl rand -hex 8)"
+SPAN_VIEW="$(openssl rand -hex 8)"
+
+START="$(date +%s%N)"
+
+# helper: add ms in nanoseconds
+ns_add_ms () { echo "$(( $1 + ($2 * 1000000) ))"; }
+
+T0="$START"
+T1="$(ns_add_ms "$T0" 2)"     # middleware end
+T2="$(ns_add_ms "$T0" 35)"    # controller end
+TDB0="$(ns_add_ms "$T0" 10)"
+TDB1="$(ns_add_ms "$T0" 18)"
+TC0="$(ns_add_ms "$T0" 5)"
+TC1="$(ns_add_ms "$T0" 6)"
+TH0="$(ns_add_ms "$T0" 20)"
+TH1="$(ns_add_ms "$T0" 32)"
+TV0="$(ns_add_ms "$T0" 33)"
+TV1="$(ns_add_ms "$T0" 35)"
+TEND="$(ns_add_ms "$T0" 40)"  # request end
+
+curl -sS -X POST "http://localhost:4318/v1/traces" \
+  -H "Content-Type: application/json" \
+  --data @- <<EOF
+{
+  "resourceSpans": [{
+    "resource": {
+      "attributes": [
+        {"key":"service.name","value":{"stringValue":"laravel-demo"}},
+        {"key":"service.version","value":{"stringValue":"12.0.0"}},
+        {"key":"deployment.environment","value":{"stringValue":"local"}},
+        {"key":"telemetry.sdk.name","value":{"stringValue":"manual-otlp-test"}}
+      ]
+    },
+    "scopeSpans": [{
+      "scope": {"name":"laravel.simulated","version":"1.0.0"},
+      "spans": [
+        {
+          "traceId": "${TRACE_ID}",
+          "spanId": "${ROOT_SPAN}",
+          "name": "HTTP GET /demo/users",
+          "kind": 2,
+          "startTimeUnixNano": "${T0}",
+          "endTimeUnixNano": "${TEND}",
+          "attributes": [
+            {"key":"http.request.method","value":{"stringValue":"GET"}},
+            {"key":"url.path","value":{"stringValue":"/demo/users"}},
+            {"key":"server.address","value":{"stringValue":"localhost"}},
+            {"key":"server.port","value":{"intValue":"8000"}},
+            {"key":"http.route","value":{"stringValue":"/demo/users"}},
+            {"key":"http.response.status_code","value":{"intValue":"200"}},
+            {"key":"user_agent.original","value":{"stringValue":"curl/8.x"}},
+            {"key":"client.address","value":{"stringValue":"127.0.0.1"}}
+          ],
+          "status": {"code": 1}
+        },
+
+        {
+          "traceId": "${TRACE_ID}",
+          "spanId": "${SPAN_MW}",
+          "parentSpanId": "${ROOT_SPAN}",
+          "name": "middleware: VerifyCsrfToken",
+          "kind": 1,
+          "startTimeUnixNano": "${T0}",
+          "endTimeUnixNano": "${T1}",
+          "attributes": [
+            {"key":"laravel.middleware","value":{"stringValue":"VerifyCsrfToken"}}
+          ],
+          "status": {"code": 1}
+        },
+
+        {
+          "traceId": "${TRACE_ID}",
+          "spanId": "${SPAN_CTRL}",
+          "parentSpanId": "${ROOT_SPAN}",
+          "name": "controller: UserController@index",
+          "kind": 1,
+          "startTimeUnixNano": "${T1}",
+          "endTimeUnixNano": "${T2}",
+          "attributes": [
+            {"key":"code.function","value":{"stringValue":"index"}},
+            {"key":"code.namespace","value":{"stringValue":"App\\\\Http\\\\Controllers\\\\UserController"}},
+            {"key":"laravel.route.name","value":{"stringValue":"demo.users.index"}}
+          ],
+          "status": {"code": 1}
+        },
+
+        {
+          "traceId": "${TRACE_ID}",
+          "spanId": "${SPAN_CACHE}",
+          "parentSpanId": "${SPAN_CTRL}",
+          "name": "cache.get users:list",
+          "kind": 1,
+          "startTimeUnixNano": "${TC0}",
+          "endTimeUnixNano": "${TC1}",
+          "attributes": [
+            {"key":"cache.system","value":{"stringValue":"redis"}},
+            {"key":"cache.operation","value":{"stringValue":"get"}},
+            {"key":"cache.key","value":{"stringValue":"users:list"}}
+          ],
+          "status": {"code": 1}
+        },
+
+        {
+          "traceId": "${TRACE_ID}",
+          "spanId": "${SPAN_DB}",
+          "parentSpanId": "${SPAN_CTRL}",
+          "name": "SELECT users",
+          "kind": 1,
+          "startTimeUnixNano": "${TDB0}",
+          "endTimeUnixNano": "${TDB1}",
+          "attributes": [
+            {"key":"db.system","value":{"stringValue":"mysql"}},
+            {"key":"db.name","value":{"stringValue":"app"}},
+            {"key":"db.operation","value":{"stringValue":"SELECT"}},
+            {"key":"db.sql.table","value":{"stringValue":"users"}},
+            {"key":"db.statement","value":{"stringValue":"select * from users where active = 1 order by id desc limit 20"}}
+          ],
+          "status": {"code": 1}
+        },
+
+        {
+          "traceId": "${TRACE_ID}",
+          "spanId": "${SPAN_HTTP}",
+          "parentSpanId": "${SPAN_CTRL}",
+          "name": "HTTP GET https://api.example.test/profile",
+          "kind": 3,
+          "startTimeUnixNano": "${TH0}",
+          "endTimeUnixNano": "${TH1}",
+          "attributes": [
+            {"key":"http.request.method","value":{"stringValue":"GET"}},
+            {"key":"url.full","value":{"stringValue":"https://api.example.test/profile?user=123"}},
+            {"key":"server.address","value":{"stringValue":"api.example.test"}},
+            {"key":"server.port","value":{"intValue":"443"}},
+            {"key":"http.response.status_code","value":{"intValue":"200"}}
+          ],
+          "status": {"code": 1}
+        },
+
+        {
+          "traceId": "${TRACE_ID}",
+          "spanId": "${SPAN_VIEW}",
+          "parentSpanId": "${SPAN_CTRL}",
+          "name": "view.render users/index.blade.php",
+          "kind": 1,
+          "startTimeUnixNano": "${TV0}",
+          "endTimeUnixNano": "${TV1}",
+          "attributes": [
+            {"key":"laravel.view","value":{"stringValue":"users.index"}},
+            {"key":"template.name","value":{"stringValue":"users/index.blade.php"}}
+          ],
+          "status": {"code": 1}
+        }
+      ]
+    }]
+  }]
+}
+EOF
+
+echo "Sent trace. service=laravel-demo traceId=${TRACE_ID}"

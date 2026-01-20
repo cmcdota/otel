@@ -2,20 +2,21 @@
 
 namespace App\Http\Controllers;
 
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 class NewController
 {
     public function testMe()
     {
-        Log::channel('otel')->info(
-            'Laravel OTEL test 1',
-            [
-                'user_id' => 123,
-                'feature' => 'opentelemetry-demo',
-            ]
-        );
+        $r = Http::withOptions(['verify' => false])
+            ->get('https://httpbin.org/get', ['user' => '123']);
 
-        return view('welcome');
+        // какие-то запросы в БД (у тебя они уже есть)
+        // ...
+
+        return response()->json([
+            'httpbin' => $r->json(),
+        ]);
     }
 }
