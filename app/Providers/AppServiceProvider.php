@@ -50,6 +50,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+
         Event::listen(QueryExecuted::class, function (QueryExecuted $event) {
             // создаём child span внутри текущего активного HTTP span
             $tracer = Globals::tracerProvider()->getTracer('laravel.db');
